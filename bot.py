@@ -78,7 +78,8 @@ async def send_welcome_to_user(chat_id: int, user: User, context: ContextTypes.D
         "እንዲሁም ደግሞ የራሳችሁን ትክክለኛ መረጃ ከዚህ በታች ባለው ሊንክ ይላኩልን፦\n"
         "https://majestic-otter-eb8ae7.netlify.app\n\n"
         "ተባረኩልን! ጥያቄ ካሎት inbox: @yabuti10\n\n"
-        "<i>⏳ «ተነቧል / አጥፋው» ሲነኩ ወዲያውኑ ይጠፋል፤ ባይነካም ከ 1 ደቂቃ በኋላ በራሱ ይጠፋል።</i>"
+        "📌 <b>ማስታወሻ፦</b> መልእክቱን አንብበው ሲጨርሱ ከታች ያለውን <b>«✅ ተነቧል / አጥፋው»</b> "
+        "የሚለውን በተን ይንኩ — ሲነኩት ወዲያውኑ ይጠፋል! (ባይነካም ከ 1 ደቂቃ በኋላ በራሱ ይጠፋል።)"
     )
 
     keyboard = InlineKeyboardMarkup(
