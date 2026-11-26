@@ -3,17 +3,25 @@ import logging
 import os
 from threading import Thread
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import Update, User
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, User
 from telegram.constants import ChatMemberStatus
-from telegram.ext import ApplicationBuilder, ChatMemberHandler, MessageHandler, filters, ContextTypes
-from telegram.error import Forbidden
+from telegram.ext import (
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    ChatMemberHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+DELETE_AFTER_SECONDS = 60
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+
 
 # --- ለ Render Free Web Service የሚያገለግል ትንሽ ሰርቨር ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -22,13 +30,34 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"Bot is running!")
 
+
 def run_dummy_server():
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     server.serve_forever()
+
+
 # ----------------------------------------------------
 
-async def send_private_welcome(user: User, context: ContextTypes.DEFAULT_TYPE):
+
+async def safe_delete_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int):
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception as e:
+        logging.debug(f"መልእክቱ አስቀድሞ ጠፍቷል ወይም ማጥፋት አልተቻለም: {e}")
+
+
+async def delete_after_delay(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    message_id: int,
+    delay: int = DELETE_AFTER_SECONDS,
+):
+    await asyncio.sleep(delay)
+    await safe_delete_message(context, chat_id=chat_id, message_id=message_id)
+
+
+async def send_welcome_to_user(chat_id: int, user: User, context: ContextTypes.DEFAULT_TYPE):
     if user.is_bot:
         return
 
@@ -48,21 +77,64 @@ async def send_private_welcome(user: User, context: ContextTypes.DEFAULT_TYPE):
         "📞 <b>ለበለጠ መረጃ፦</b> 0944443319 ይደውሉ\n\n"
         "እንዲሁም ደግሞ የራሳችሁን ትክክለኛ መረጃ ከዚህ በታች ባለው ሊንክ ይላኩልን፦\n"
         "https://majestic-otter-eb8ae7.netlify.app\n\n"
-        "ተባረኩልን! ጥያቄ ካሎት inbox: @yabuti10"
+        "ተባረኩልን! ጥያቄ ካሎት inbox: @yabuti10\n\n"
+        "<i>⏳ «ተነቧል / አጥፋው» ሲነኩ ወዲያውኑ ይጠፋል፤ ባይነካም ከ 1 ደቂቃ በኋላ በራሱ ይጠፋል።</i>"
     )
 
-    try:
-        # ለገባው ሰው በግል (DM / PM) ብቻ ይልካል፤ በግሩፑ ውስጥ አይጽፍም
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=welcome_text,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    text="✅ ተነቧል / አጥፋው",
+                    callback_data=f"dismiss_welcome:{user.id}",
+                )
+            ]
+        ]
+    )
+
+    sent_msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text=welcome_text,
+        parse_mode="HTML",
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+    )
+
+    context.application.create_task(
+        delete_after_delay(
+            context,
+            chat_id=sent_msg.chat_id,
+            message_id=sent_msg.message_id,
         )
-    except Forbidden:
-        logging.info(f"ተጠቃሚው ({user.id}) ገና ቦቱን ስላልከፈተ በግል መላክ አልተቻለም።")
-    except Exception as e:
-        logging.warning(f"መልእክት ሲላክ ስህተት ተፈጥሯል: {e}")
+    )
+
+
+async def handle_dismiss_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query or not query.data:
+        return
+
+    if not query.data.startswith("dismiss_welcome:"):
+        return
+
+    try:
+        target_user_id = int(query.data.split(":", 1)[1])
+    except ValueError:
+        await query.answer()
+        return
+
+    if query.from_user.id != target_user_id:
+        await query.answer("ይህ በተን ለገባው አዲስ አባል ብቻ ነው።", show_alert=False)
+        return
+
+    await query.answer("መልእክቱ እየጠፋ ነው...")
+    if query.message:
+        await safe_delete_message(
+            context,
+            chat_id=query.message.chat_id,
+            message_id=query.message.message_id,
+        )
+
 
 async def greet_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = update.chat_member
@@ -73,11 +145,16 @@ async def greet_chat_member_update(update: Update, context: ContextTypes.DEFAULT
     new_status = result.new_chat_member.status
     user = result.new_chat_member.user
 
-    was_outside = old_status in (ChatMemberStatus.LEFT, ChatMemberStatus.BANNED, ChatMemberStatus.RESTRICTED)
+    was_outside = old_status in (
+        ChatMemberStatus.LEFT,
+        ChatMemberStatus.BANNED,
+        ChatMemberStatus.RESTRICTED,
+    )
     is_now_member = new_status == ChatMemberStatus.MEMBER
 
     if was_outside and is_now_member:
-        await send_private_welcome(user=user, context=context)
+        await send_welcome_to_user(chat_id=result.chat.id, user=user, context=context)
+
 
 async def greet_new_chat_members_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -85,7 +162,8 @@ async def greet_new_chat_members_message(update: Update, context: ContextTypes.D
         return
 
     for member in msg.new_chat_members:
-        await send_private_welcome(user=member, context=context)
+        await send_welcome_to_user(chat_id=msg.chat.id, user=member, context=context)
+
 
 def main():
     Thread(target=run_dummy_server, daemon=True).start()
@@ -93,9 +171,11 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(ChatMemberHandler(greet_chat_member_update, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, greet_new_chat_members_message))
+    app.add_handler(CallbackQueryHandler(handle_dismiss_button, pattern=r"^dismiss_welcome:\d+$"))
 
     print("ቦቱ በ Render ላይ መስራት ጀምሯል...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
+
 
 if __name__ == "__main__":
     main()
