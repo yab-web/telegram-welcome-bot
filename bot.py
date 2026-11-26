@@ -6,9 +6,9 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, User
 from telegram.constants import ChatMemberStatus
 from telegram.ext import ApplicationBuilder, ChatMemberHandler, MessageHandler, filters, ContextTypes
+from telegram.error import Forbidden
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-DELETE_AFTER_SECONDS = 60
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -28,14 +28,7 @@ def run_dummy_server():
     server.serve_forever()
 # ----------------------------------------------------
 
-async def delete_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, delay: int = DELETE_AFTER_SECONDS):
-    await asyncio.sleep(delay)
-    try:
-        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except Exception as e:
-        logging.warning(f"መልእክቱን ማጥፋት አልተቻለም: {e}")
-
-async def send_welcome_to_user(chat_id: int, user: User, context: ContextTypes.DEFAULT_TYPE):
+async def send_private_welcome(user: User, context: ContextTypes.DEFAULT_TYPE):
     if user.is_bot:
         return
 
@@ -55,20 +48,21 @@ async def send_welcome_to_user(chat_id: int, user: User, context: ContextTypes.D
         "📞 <b>ለበለጠ መረጃ፦</b> 0944443319 ይደውሉ\n\n"
         "እንዲሁም ደግሞ የራሳችሁን ትክክለኛ መረጃ ከዚህ በታች ባለው ሊንክ ይላኩልን፦\n"
         "https://majestic-otter-eb8ae7.netlify.app\n\n"
-        "ተባረኩልን! ጥያቄ ካሎት inbox: @yabuti10\n\n"
-        "<i>⏳ ይህ መልእክት ከ 1 ደቂቃ በኋላ በራሱ ይጠፋል።</i>"
+        "ተባረኩልን! ጥያቄ ካሎት inbox: @yabuti10"
     )
 
-    sent_msg = await context.bot.send_message(
-        chat_id=chat_id,
-        text=welcome_text,
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-    )
-
-    context.application.create_task(
-        delete_after_delay(context, chat_id=sent_msg.chat_id, message_id=sent_msg.message_id)
-    )
+    try:
+        # ለገባው ሰው በግል (DM / PM) ብቻ ይልካል፤ በግሩፑ ውስጥ አይጽፍም
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=welcome_text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+    except Forbidden:
+        logging.info(f"ተጠቃሚው ({user.id}) ገና ቦቱን ስላልከፈተ በግል መላክ አልተቻለም።")
+    except Exception as e:
+        logging.warning(f"መልእክት ሲላክ ስህተት ተፈጥሯል: {e}")
 
 async def greet_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = update.chat_member
@@ -83,7 +77,7 @@ async def greet_chat_member_update(update: Update, context: ContextTypes.DEFAULT
     is_now_member = new_status == ChatMemberStatus.MEMBER
 
     if was_outside and is_now_member:
-        await send_welcome_to_user(chat_id=result.chat.id, user=user, context=context)
+        await send_private_welcome(user=user, context=context)
 
 async def greet_new_chat_members_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -91,7 +85,7 @@ async def greet_new_chat_members_message(update: Update, context: ContextTypes.D
         return
 
     for member in msg.new_chat_members:
-        await send_welcome_to_user(chat_id=msg.chat.id, user=member, context=context)
+        await send_private_welcome(user=member, context=context)
 
 def main():
     Thread(target=run_dummy_server, daemon=True).start()
